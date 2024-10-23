@@ -11,17 +11,23 @@ import s3 = require('aws-cdk-lib/aws-s3');
 import {LambdaFunction} from "aws-cdk-lib/aws-events-targets";
 import { Construct } from 'constructs';
 
+var ENV = '';
+
 export class RekognitionPipelineStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
     // The code that defines your stack goes here
+
+    // Change stack parameters based on provided context
+    ENV = this.node.tryGetContext('ENV') || ENV;
     
     //**********SNS Topics******************************
     const jobCompletionTopic = new sns.Topic(this, 'JobCompletion');
 
     //**********IAM Roles******************************
     const rekognitionServiceRole = new iam.Role(this, 'RekognitionServiceRole', {
+      roleName: `rekognition-service-role-${ENV}`,
       assumedBy: new iam.ServicePrincipal('rekognition.amazonaws.com')
     });
     rekognitionServiceRole.addToPolicy(
@@ -35,20 +41,21 @@ export class RekognitionPipelineStack extends cdk.Stack {
 
     //**********S3 Batch Operations Role******************************
     const s3BatchOperationsRole = new iam.Role(this, 'S3BatchOperationsRole', {
+      roleName: `rekognition-s3-batch-operations-role-${ENV}`,
       assumedBy: new iam.ServicePrincipal('batchoperations.s3.amazonaws.com')
     });
 
     //**********S3 Bucket******************************
     //S3 bucket for input items and output
-    const contentBucket = new s3.Bucket(this, 'ContentBucket', {versioned: false});
+    const contentBucket = new s3.Bucket(this, 'ContentBucket', {bucketName: `rekognition-input-${ENV}`, versioned: false});
 
-    const existingContentBucket = new s3.Bucket(this, 'ExistingContentBucket', {versioned: false});
+    const existingContentBucket = new s3.Bucket(this, 'ExistingContentBucket', {bucketName: `rekognition-existing-bucket-${ENV}`, versioned: false});
     existingContentBucket.grantReadWrite(s3BatchOperationsRole)
 
-    const inventoryAndLogsBucket = new s3.Bucket(this, 'InventoryAndLogsBucket', {versioned: false});
+    const inventoryAndLogsBucket = new s3.Bucket(this, 'InventoryAndLogsBucket', {bucketName: `rekognition-inventory-logs-${ENV}`, versioned: false});
     inventoryAndLogsBucket.grantReadWrite(s3BatchOperationsRole)
 
-    const outputBucket = new s3.Bucket(this, 'OutputBucket', {versioned: false});
+    const outputBucket = new s3.Bucket(this, 'OutputBucket', {bucketName: `rekognition-output-${ENV}`, versioned: false});
 
     //**********DynamoDB Table*************************
     //DynamoDB table with links to output in S3
@@ -86,16 +93,18 @@ export class RekognitionPipelineStack extends cdk.Stack {
 
     // Helper Layer with helper functions
     const helperLayer = new lambda.LayerVersion(this, 'HelperLayer', {
+      layerVersionName: `rekognition_helper_layer_${ENV}`,
       code: lambda.Code.fromAsset('lambda/helper'),
       compatibleRuntimes: [lambda.Runtime.PYTHON_3_9],
       license: 'Apache-2.0',
-      description: 'Helper layer.',
+      description: 'Helper layer for Rekognition.',
     });
 
     //------------------------------------------------------------
 
     // S3 Event processor
     const s3Processor = new lambda.Function(this, 'S3Processor', {
+      functionName: `rekognition_s3_processor_${ENV}`,
       runtime: lambda.Runtime.PYTHON_3_9,
       code: lambda.Code.fromAsset('lambda/s3processor'),
       handler: 'lambda_function.lambda_handler',
@@ -139,6 +148,7 @@ export class RekognitionPipelineStack extends cdk.Stack {
 
     // S3 Batch Operations Event processor 
     const s3BatchProcessor = new lambda.Function(this, 'S3BatchProcessor', {
+      functionName: `rekognition_s3_batch_processor_${ENV}`,
       runtime: lambda.Runtime.PYTHON_3_9,
       code: lambda.Code.fromAsset('lambda/s3batchprocessor'),
       handler: 'lambda_function.lambda_handler',
@@ -164,6 +174,7 @@ export class RekognitionPipelineStack extends cdk.Stack {
 
     // Item processor (Router to Sync/Async Pipeline)
     const itemProcessor = new lambda.Function(this, 'TaskProcessor', {
+      functionName: `rekognition_task_processor_${ENV}`,
       runtime: lambda.Runtime.PYTHON_3_9,
       code: lambda.Code.fromAsset('lambda/itemprocessor'),
       handler: 'lambda_function.lambda_handler',
@@ -189,6 +200,7 @@ export class RekognitionPipelineStack extends cdk.Stack {
 
     // Sync Jobs Processor (Process jobs using sync APIs)
     const syncProcessor = new lambda.Function(this, 'SyncProcessor', {
+      functionName: `rekognition_sync_processor_${ENV}`,
       runtime: lambda.Runtime.PYTHON_3_9,
       code: lambda.Code.fromAsset('lambda/syncprocessor'),
       handler: 'lambda_function.lambda_handler',
@@ -222,6 +234,7 @@ export class RekognitionPipelineStack extends cdk.Stack {
 
     // Async Job Processor (Start jobs using Async APIs)
     const asyncProcessor = new lambda.Function(this, 'ASyncProcessor', {
+      functionName: `rekognition_async_processor_${ENV}`,
       runtime: lambda.Runtime.PYTHON_3_9,
       code: lambda.Code.fromAsset('lambda/asyncprocessor'),
       handler: 'lambda_function.lambda_handler',
@@ -267,6 +280,7 @@ export class RekognitionPipelineStack extends cdk.Stack {
 
     // Async Jobs Results Processor
     const jobResultProcessor = new lambda.Function(this, 'JobResultProcessor', {
+      functionName: `rekognition_job_result_processor_${ENV}`,
       runtime: lambda.Runtime.PYTHON_3_9,
       code: lambda.Code.fromAsset('lambda/jobresultprocessor'),
       handler: 'lambda_function.lambda_handler',
@@ -301,6 +315,7 @@ export class RekognitionPipelineStack extends cdk.Stack {
     // S3 folders creator
 
     const s3FolderCreator = new lambda.Function(this, 's3FolderCreator', {
+      functionName: `rekognition_s3_folder_creator_${ENV}`,
       code: lambda.Code.fromAsset('lambda/s3FolderCreator'),
       description: 'Creates folders in S3 bucket for different Rekognition APIs',
       handler: 'index.lambda_handler',
@@ -315,8 +330,5 @@ export class RekognitionPipelineStack extends cdk.Stack {
     existingContentBucket.grantReadWrite(s3FolderCreator)
     s3FolderCreator.node.addDependency(contentBucket)
     s3FolderCreator.node.addDependency(existingContentBucket)
-
-    
-
   }
 }
